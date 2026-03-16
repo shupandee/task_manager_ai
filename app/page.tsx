@@ -265,16 +265,25 @@ function AIView({ viewerName }: { viewerName: string }) {
     if (msgsRef.current) msgsRef.current.scrollTop = msgsRef.current.scrollHeight;
   }, [messages]);
 
+const [history, setHistory] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
+
   async function send(q?: string) {
     const query = (q ?? input).trim();
     if (!query) return;
     setInput("");
+    const newHistory = [...history, { role: "user" as const, content: query }];
     setMessages((prev) => [...prev, { role: "user", content: query }]);
     setLoading(true);
     try {
-      const res  = await fetch("/api/ai-query", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query, viewer: viewerName || null }) });
+      const res  = await fetch("/api/ai-query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query, viewer: viewerName || null, history }),
+      });
       const data = await res.json();
-      setMessages((prev) => [...prev, { role: "bot", content: data.response ?? data.error ?? "No response" }]);
+      const reply = data.response ?? data.error ?? "No response";
+      setHistory([...newHistory, { role: "assistant" as const, content: reply }]);
+      setMessages((prev) => [...prev, { role: "bot", content: reply }]);
     } catch {
       setMessages((prev) => [...prev, { role: "bot", content: "Could not reach the AI endpoint." }]);
     }

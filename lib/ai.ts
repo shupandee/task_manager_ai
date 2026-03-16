@@ -201,8 +201,11 @@ function runTool(name: string, args: Record<string, any>): string {
 }
 
 // ── Agentic loop ───────────────────────────────────────────────────────────────
-
-export async function runAgent(query: string, viewer: string | null): Promise<string> {
+export async function runAgent(
+  query: string,
+  viewer: string | null,
+  history: { role: "user" | "assistant"; content: string }[] = []
+): Promise<string> {
   const client     = getClient();
   const today      = new Date().toISOString().split("T")[0];
   const viewerLabel = viewer ?? "all users";
@@ -210,15 +213,30 @@ export async function runAgent(query: string, viewer: string | null): Promise<st
   const systemPrompt = `You are TaskFlow AI, a helpful task-management assistant.
 Today is ${today}. Current viewer: ${viewerLabel}.
 
-You have access to tools to list, create, update, delete tasks and get summaries.
-Always use the tools to fetch live data before answering questions about tasks.
-Be concise. Format task lists as markdown bullets:
-  • **Title** · status · priority · due: YYYY-MM-DD · assigned_to → assigned_by
+## Extracting names from user messages
+- "create a task for X" → assigned_to = X
+- "create a task from Y" or "assigned by Y" → assigned_by = Y
+- "create a task for X from Y" → assigned_to = X, assigned_by = Y
+- Always extract names from the FULL conversation, not just the latest message.
+- If the user said "for deepanshu from mahesh" earlier, use assigned_to="deepanshu", assigned_by="mahesh" even in follow-up messages.
+- Never use "unknown" for assigned_to or assigned_by — always extract from context or ask the user.
+
+## Rules
+- ALWAYS call list_tasks or get_summary BEFORE answering any question about tasks — never rely on memory.
+- Name matching is case-insensitive and partial. "deepanshu" will match "Deepanshu Kumar".
+- If a query mentions a person, call list_tasks with their name as assigned_to AND separately as assigned_by, then combine and deduplicate results.
+- Dates from users may be in DD/MM/YYYY — the tool normalises them to YYYY-MM-DD automatically.
+- When showing tasks, format each as a markdown bullet:
+    • **Title** | status | priority | due: YYYY-MM-DD | → assigned_to | by assigned_by
+- For "tasks due today", call list_tasks with no filters then show only tasks where due_date === ${today}.
+- If results are empty, say so and mention what filter was applied.
+- Never fabricate task data. Only use what the tools return.
 `;
 
   const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-    { role: "system",  content: systemPrompt },
-    { role: "user",    content: query },
+    { role: "system", content: systemPrompt },
+    ...history,
+    { role: "user", content: query },
   ];
 
   for (let i = 0; i < 10; i++) {
