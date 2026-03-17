@@ -137,6 +137,21 @@ function ListView({
                     </span>
                   )}
                 </div>
+                {(t.comments ?? []).length > 0 && (() => {
+                  const comments = t.comments ?? [];
+                  const lastComment = comments[comments.length - 1];
+                  return (
+                    <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+                      <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
+                        <span>💬 {comments.length} update{comments.length !== 1 ? "s" : ""}</span>
+                      </div>
+                      <div style={{ fontSize: 12, color: "var(--text2)", padding: "8px", background: "var(--surface2)", borderRadius: "var(--radius-sm)", lineHeight: 1.4 }}>
+                        <div style={{ fontWeight: 500, marginBottom: 4 }}>{lastComment?.author}:</div>
+                        <div style={{ fontSize: 11, color: "var(--text3)" }}>{lastComment?.text?.substring(0, 80)}{(lastComment?.text?.length ?? 0) > 80 ? "..." : ""}</div>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
               <div className="task-actions" onClick={(e) => e.stopPropagation()}>
                 <button className="btn btn-ghost btn-sm" onClick={() => onEdit(t.id)}>Edit</button>
@@ -180,6 +195,11 @@ function KanbanView({ tasks, onEdit }: { tasks: Task[]; onEdit: (id: string) => 
                     <div className="kanban-meta"><span className={`tag tag-priority-${t.priority}`}>{t.priority}</span></div>
                     <div className="kanban-names">→ {t.assigned_to || "—"}<br />by {t.assigned_by || "—"}</div>
                     {t.due_date && <div style={{ fontSize: 10, marginTop: 5, color: ov ? "var(--urgent)" : "var(--text3)" }}>Due {fmtDate(t.due_date)}</div>}
+                    {(t.comments ?? []).length > 0 && (
+                      <div style={{ fontSize: 9, marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--border)", color: "var(--text3)" }}>
+                        💬 {(t.comments ?? []).length} update{(t.comments ?? []).length !== 1 ? "s" : ""}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -253,7 +273,7 @@ function CalendarView({ allTasks, onEdit }: { allTasks: Task[]; onEdit: (id: str
                 const col = t.priority === "urgent" ? "var(--urgent)" : t.priority === "high" ? "var(--high)" : "var(--accent)";
                 return (
                   <div key={t.id} className="cal-task-dot" style={{ background: bg, color: col }}
-                    onClick={() => onEdit(t.id)} title={t.assigned_to}>{t.title}</div>
+                    onClick={() => onEdit(t.id)} title={`${t.title}${(t.comments?.length ?? 0) > 0 ? ` (${t.comments?.length ?? 0} updates)` : ""}`}>{t.title}</div>
                 );
               })}
               {dt.length > 2 && <div className="cal-more">+{dt.length - 2} more</div>}
@@ -352,37 +372,47 @@ function AssigneeUpdateModal({
   task: Task | null;
   viewerName: string;
   onClose: () => void;
-  onUpdated: () => void;
+  onUpdated: (updatedTask: Task) => void;
 }) {
   const [selectedStatus, setSelectedStatus] = useState("");
   const [comment, setComment] = useState("");
   const [saving, setSaving] = useState(false);
+  const [displayTask, setDisplayTask] = useState<Task | null>(null);
 
   useEffect(() => {
-    if (task) setSelectedStatus(task.status);
-  }, [task]);
+    if (task && (!displayTask || displayTask.id !== task.id)) {
+      setSelectedStatus(task.status);
+      setDisplayTask(task);
+    }
+  }, [task?.id]);
 
   if (!task) return null;
 
   const isAssignee = task.assigned_to.toLowerCase() === viewerName.toLowerCase();
 
   async function handleUpdate() {
-    if (!task) return;
+    if (!displayTask) return;
     if (!comment.trim()) { alert("Please add a comment"); return; }
     setSaving(true);
-    await fetch(`/api/tasks/${task.id}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        author: viewerName || task.assigned_to,
-        text: comment.trim(),
-        status: selectedStatus !== task.status ? selectedStatus : undefined,
-      }),
-    });
+    try {
+      const res = await fetch(`/api/tasks/${displayTask.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          author: viewerName || displayTask.assigned_to,
+          text: comment.trim(),
+          status: selectedStatus !== displayTask.status ? selectedStatus : undefined,
+        }),
+      });
+      const updatedTask = await res.json();
+      setDisplayTask(updatedTask);
+      setSelectedStatus(updatedTask.status);
+      setComment("");
+      onUpdated(updatedTask);
+    } catch (err) {
+      alert("Failed to update task");
+    }
     setSaving(false);
-    setComment("");
-    onUpdated();
-    onClose();
   }
 
   return (
@@ -391,7 +421,7 @@ function AssigneeUpdateModal({
         {/* Header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
           <div>
-            <div className="modal-title" style={{ marginBottom: 4 }}>{task.title}</div>
+            <div className="modal-title" style={{ marginBottom: 4 }}>{displayTask?.title}</div>
             <div style={{ fontSize: 11, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "1px" }}>
               Update Progress &amp; Status
             </div>
@@ -425,10 +455,10 @@ function AssigneeUpdateModal({
 
           {/* Right: timeline */}
           <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: 260, overflowY: "auto" }}>
-            {(task.comments ?? []).length === 0 && (
+            {(displayTask?.comments ?? []).length === 0 && (
               <div style={{ color: "var(--text3)", fontSize: 12, padding: "20px 0", textAlign: "center" }}>No updates yet</div>
             )}
-            {[...(task.comments ?? [])].reverse().map((c) => (
+            {[...(displayTask?.comments ?? [])].reverse().map((c) => (
               <div key={c.id} style={{
                 background: "var(--surface2)", border: "1px solid var(--border)",
                 borderRadius: "var(--radius-sm)", padding: "10px 12px",
@@ -468,7 +498,7 @@ function AssigneeUpdateModal({
           </div>
         ) : (
           <div style={{ marginTop: 16, padding: "10px 14px", background: "var(--surface2)", borderRadius: "var(--radius-sm)", fontSize: 12, color: "var(--text3)", textAlign: "center" }}>
-            Only the assignee ({task.assigned_to}) can update this task
+            Only the assignee ({displayTask?.assigned_to}) can update this task
           </div>
         )}
       </div>
@@ -804,7 +834,10 @@ export default function TaskFlowApp() {
           task={updateModalTask}
           viewerName={viewerName}
           onClose={() => setUpdateModalTask(null)}
-          onUpdated={loadTasks}
+          onUpdated={(updatedTask) => {
+            setAllTasks(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
+            loadTasks();
+          }}
         />
       )}
     </>
