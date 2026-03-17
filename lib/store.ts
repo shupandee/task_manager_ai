@@ -1,11 +1,17 @@
 // lib/store.ts
-// File-based JSON storage — mirrors tasks_data.json from the Python backend
-
 import fs from "fs";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
 
 const DATA_FILE = path.join(process.cwd(), "tasks_data.json");
+
+export interface Comment {
+  id: string;
+  author: string;
+  text: string;
+  status_changed_to?: string;
+  created_at: string;
+}
 
 export interface Task {
   id: string;
@@ -13,11 +19,12 @@ export interface Task {
   description: string;
   assigned_to: string;
   assigned_by: string;
-  status: "todo" | "in_progress" | "done";
+  status: "todo" | "in_progress" | "done" | "blocked";
   priority: "low" | "medium" | "high" | "urgent";
   due_date: string;
   created_at: string;
   tags: string[];
+  comments: Comment[];
 }
 
 interface Store {
@@ -37,6 +44,7 @@ const SEED: Store = {
       due_date: "2026-03-15",
       created_at: "2026-03-01T10:00:00",
       tags: ["design", "marketing"],
+      comments: [],
     },
     {
       id: uuidv4(),
@@ -49,6 +57,7 @@ const SEED: Store = {
       due_date: "2026-03-12",
       created_at: "2026-03-05T09:00:00",
       tags: ["bug", "auth"],
+      comments: [],
     },
     {
       id: uuidv4(),
@@ -61,6 +70,7 @@ const SEED: Store = {
       due_date: "2026-03-20",
       created_at: "2026-03-03T14:00:00",
       tags: ["report", "quarterly"],
+      comments: [],
     },
     {
       id: uuidv4(),
@@ -73,6 +83,7 @@ const SEED: Store = {
       due_date: "2026-03-18",
       created_at: "2026-03-04T11:00:00",
       tags: ["backend", "performance"],
+      comments: [],
     },
     {
       id: uuidv4(),
@@ -85,6 +96,7 @@ const SEED: Store = {
       due_date: "2026-03-10",
       created_at: "2026-02-28T08:00:00",
       tags: ["docs", "hr"],
+      comments: [],
     },
   ],
 };
@@ -92,7 +104,10 @@ const SEED: Store = {
 export function loadData(): Store {
   if (fs.existsSync(DATA_FILE)) {
     try {
-      return JSON.parse(fs.readFileSync(DATA_FILE, "utf-8")) as Store;
+      const raw = JSON.parse(fs.readFileSync(DATA_FILE, "utf-8")) as Store;
+      // migrate old tasks that don't have comments array
+      raw.tasks = raw.tasks.map((t) => ({ ...t, comments: [] }));
+      return raw;
     } catch {
       // fall through to seed
     }
@@ -111,17 +126,16 @@ export function allNames(tasks: Task[]): string[] {
     if (t.assigned_to) names.add(t.assigned_to);
     if (t.assigned_by) names.add(t.assigned_by);
   });
-  return [...names].sort();
+  return Array.from(names).sort();
 }
 
-export function createTask(
-  payload: Omit<Task, "id" | "created_at">
-): Task {
+export function createTask(payload: Omit<Task, "id" | "created_at" | "comments">): Task {
   const data = loadData();
   const task: Task = {
     ...payload,
     id: uuidv4(),
     created_at: new Date().toISOString(),
+    comments: [],
   };
   data.tasks.push(task);
   saveData(data);
@@ -132,7 +146,6 @@ export function updateTask(id: string, patch: Partial<Task>): Task | null {
   const data = loadData();
   const idx = data.tasks.findIndex((t) => t.id === id);
   if (idx === -1) return null;
-  // Remove undefined/null keys
   const clean = Object.fromEntries(
     Object.entries(patch).filter(([, v]) => v !== null && v !== undefined)
   ) as Partial<Task>;
@@ -148,4 +161,31 @@ export function deleteTask(id: string): boolean {
   if (data.tasks.length === before) return false;
   saveData(data);
   return true;
+}
+
+export function addComment(
+  taskId: string,
+  author: string,
+  text: string,
+  newStatus?: string
+): Task | null {
+  const data = loadData();
+  const idx = data.tasks.findIndex((t) => t.id === taskId);
+  if (idx === -1) return null;
+
+  const comment: Comment = {
+    id: uuidv4(),
+    author,
+    text,
+    created_at: new Date().toISOString(),
+    ...(newStatus ? { status_changed_to: newStatus } : {}),
+  };
+
+  data.tasks[idx].comments = [...(data.tasks[idx].comments ?? []), comment];
+  if (newStatus) {
+    data.tasks[idx].status = newStatus as Task["status"];
+  }
+
+  saveData(data);
+  return data.tasks[idx];
 }

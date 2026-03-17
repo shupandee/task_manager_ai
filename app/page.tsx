@@ -3,6 +3,14 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
 // ─────────────────────────── Types ────────────────────────────────────────────
+interface Comment {
+  id: string;
+  author: string;
+  text: string;
+  created_at: string;
+  status_changed_to?: string;
+}
+
 interface Task {
   id: string;
   title: string;
@@ -14,6 +22,7 @@ interface Task {
   due_date: string;
   created_at: string;
   tags: string[];
+  comments?: Comment[];
 }
 
 interface AiMessage {
@@ -64,7 +73,7 @@ function NamePill({ name, label }: { name: string; label?: string }) {
 // ─────────────────────────── List View ────────────────────────────────────────
 function ListView({
   tasks, onEdit, onDelete, onToggle, statusFilter, priorityFilter,
-  setStatusFilter, setPriorityFilter,
+  setStatusFilter, setPriorityFilter, setUpdateModalTask,
 }: {
   tasks: Task[];
   onEdit: (id: string) => void;
@@ -74,6 +83,7 @@ function ListView({
   priorityFilter: string;
   setStatusFilter: (s: string) => void;
   setPriorityFilter: (p: string) => void;
+  setUpdateModalTask: (task: Task) => void;
 }) {
   const today = new Date().toISOString().split("T")[0];
   const overCnt = tasks.filter((t) => t.due_date && t.due_date < today && t.status !== "done").length;
@@ -131,6 +141,9 @@ function ListView({
               <div className="task-actions" onClick={(e) => e.stopPropagation()}>
                 <button className="btn btn-ghost btn-sm" onClick={() => onEdit(t.id)}>Edit</button>
                 <button className="btn btn-danger btn-sm" onClick={() => onDelete(t.id)}>✕</button>
+                <button className="btn btn-ghost btn-sm" onClick={(e) => { e.stopPropagation(); setUpdateModalTask(t); }}>
+                Update
+                </button>
               </div>
             </div>
           );
@@ -322,6 +335,146 @@ const [history, setHistory] = useState<{ role: "user" | "assistant"; content: st
     </div>
   );
 }
+// ─────────────────────────── Assignee Update Modal ───────────────────────────
+const STATUS_OPTIONS = [
+  { value: "todo",        label: "Open",        icon: "○" },
+  { value: "in_progress", label: "In Progress", icon: "▶" },
+  { value: "blocked",     label: "Blocked",     icon: "⏸" },
+  { value: "done",        label: "Completed",   icon: "✓" },
+];
+
+function AssigneeUpdateModal({
+  task,
+  viewerName,
+  onClose,
+  onUpdated,
+}: {
+  task: Task | null;
+  viewerName: string;
+  onClose: () => void;
+  onUpdated: () => void;
+}) {
+  const [selectedStatus, setSelectedStatus] = useState("");
+  const [comment, setComment] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (task) setSelectedStatus(task.status);
+  }, [task]);
+
+  if (!task) return null;
+
+  const isAssignee = task.assigned_to.toLowerCase() === viewerName.toLowerCase();
+
+  async function handleUpdate() {
+    if (!task) return;
+    if (!comment.trim()) { alert("Please add a comment"); return; }
+    setSaving(true);
+    await fetch(`/api/tasks/${task.id}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        author: viewerName || task.assigned_to,
+        text: comment.trim(),
+        status: selectedStatus !== task.status ? selectedStatus : undefined,
+      }),
+    });
+    setSaving(false);
+    setComment("");
+    onUpdated();
+    onClose();
+  }
+
+  return (
+    <div className="modal-overlay open" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal" style={{ width: 620, maxWidth: "95vw" }}>
+        {/* Header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
+          <div>
+            <div className="modal-title" style={{ marginBottom: 4 }}>{task.title}</div>
+            <div style={{ fontSize: 11, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "1px" }}>
+              Update Progress &amp; Status
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--text2)", fontSize: 20, cursor: "pointer", lineHeight: 1 }}>✕</button>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+          {/* Left: status picker */}
+          <div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {STATUS_OPTIONS.map((s) => (
+                <button key={s.value}
+                  onClick={() => isAssignee && setSelectedStatus(s.value)}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 12,
+                    padding: "12px 16px", borderRadius: "var(--radius-sm)",
+                    border: selectedStatus === s.value ? "2px solid var(--accent)" : "1px solid var(--border)",
+                    background: selectedStatus === s.value ? "rgba(124,92,252,0.1)" : "var(--surface2)",
+                    color: selectedStatus === s.value ? "var(--accent)" : "var(--text2)",
+                    cursor: isAssignee ? "pointer" : "default",
+                    fontSize: 14, fontWeight: 500, fontFamily: "'DM Sans', sans-serif",
+                    transition: "all 0.15s",
+                  }}>
+                  <span style={{ fontSize: 16, width: 20, textAlign: "center" }}>{s.icon}</span>
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Right: timeline */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: 260, overflowY: "auto" }}>
+            {(task.comments ?? []).length === 0 && (
+              <div style={{ color: "var(--text3)", fontSize: 12, padding: "20px 0", textAlign: "center" }}>No updates yet</div>
+            )}
+            {[...(task.comments ?? [])].reverse().map((c) => (
+              <div key={c.id} style={{
+                background: "var(--surface2)", border: "1px solid var(--border)",
+                borderRadius: "var(--radius-sm)", padding: "10px 12px",
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                  <span style={{ fontSize: 12, fontWeight: 500, color: "var(--text)" }}>{c.author}</span>
+                  <span style={{ fontSize: 11, color: "var(--text3)" }}>
+                    {new Date(c.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })},{" "}
+                    {new Date(c.created_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                </div>
+                {c.status_changed_to && (
+                  <div style={{ fontSize: 11, color: "var(--accent3)", marginBottom: 4 }}>
+                    ↪ Status changed to <strong>{stLabel(c.status_changed_to)}</strong>
+                  </div>
+                )}
+                <div style={{ fontSize: 13, color: "var(--text2)", lineHeight: 1.5 }}>{c.text}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Comment box — only for assignee */}
+        {isAssignee ? (
+          <div style={{ marginTop: 20 }}>
+            <div style={{ fontSize: 11, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "1px", marginBottom: 8 }}>
+              Status Details / Comments
+            </div>
+            <textarea className="form-textarea"
+              value={comment} onChange={(e) => setComment(e.target.value)}
+              placeholder="Describe current progress or issues…"
+              style={{ minHeight: 80, marginBottom: 12 }} />
+            <button className="btn btn-primary" style={{ width: "100%", justifyContent: "center" }}
+              onClick={handleUpdate} disabled={saving}>
+              {saving ? "Saving…" : "✈ Update Task"}
+            </button>
+          </div>
+        ) : (
+          <div style={{ marginTop: 16, padding: "10px 14px", background: "var(--surface2)", borderRadius: "var(--radius-sm)", fontSize: 12, color: "var(--text3)", textAlign: "center" }}>
+            Only the assignee ({task.assigned_to}) can update this task
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ─────────────────────────── Modal ────────────────────────────────────────────
 interface ModalProps {
@@ -463,6 +616,8 @@ export default function TaskFlowApp() {
   const [priorityFilter, setPriorityFilter] = useState("all");
   const [modalOpen, setModalOpen]     = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  // add this state alongside your other useState calls
+  const [updateModalTask, setUpdateModalTask] = useState<Task | null>(null);
 
   // Fetch tasks (with optional viewer + role filters)
   const loadTasks = useCallback(async (viewer = viewerName, view = currentView) => {
@@ -481,7 +636,7 @@ export default function TaskFlowApp() {
     const pData  = await pRes.json();
     const seen   = new Set<string>([...(pData.names ?? [])]);
     tasks.forEach((t) => { if (t.assigned_to) seen.add(t.assigned_to); if (t.assigned_by) seen.add(t.assigned_by); });
-    setKnownNames([...seen].sort());
+    setKnownNames(Array.from(seen).sort());
   }, [viewerName, currentView]);
 
   useEffect(() => { loadTasks(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -625,7 +780,8 @@ export default function TaskFlowApp() {
           {currentLayout === "list" && (
             <ListView tasks={filtered} onEdit={openEdit} onDelete={handleDelete} onToggle={handleToggle}
               statusFilter={statusFilter} priorityFilter={priorityFilter}
-              setStatusFilter={setStatusFilter} setPriorityFilter={setPriorityFilter} />
+              setStatusFilter={setStatusFilter} setPriorityFilter={setPriorityFilter} setUpdateModalTask={setUpdateModalTask} />
+              
           )}
           {currentLayout === "kanban" && (
             <KanbanView tasks={filtered} onEdit={openEdit} />
@@ -640,7 +796,17 @@ export default function TaskFlowApp() {
       </div>
 
       <TaskModal open={modalOpen} editing={editingTask} onClose={() => { setModalOpen(false); setEditingTask(null); }}
-        onSave={handleSave} viewerName={viewerName} knownNames={knownNames} />
+        onSave={handleSave} viewerName={viewerName} knownNames={knownNames} 
+        />
+      
+      {updateModalTask && (
+        <AssigneeUpdateModal
+          task={updateModalTask}
+          viewerName={viewerName}
+          onClose={() => setUpdateModalTask(null)}
+          onUpdated={loadTasks}
+        />
+      )}
     </>
   );
 }
